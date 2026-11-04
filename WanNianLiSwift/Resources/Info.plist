@@ -26,6 +26,12 @@
 	<string>13.0</string>
 	<key>LSUIElement</key>
 	<true/>
+	<key>NSCalendarsUsageDescription</key>
+	<string>万年历需要读取系统日历，以显示所选日期的事件和时间；不会修改或上传日程。</string>
+	<key>NSCalendarsFullAccessUsageDescription</key>
+	<string>万年历需要读取系统日历，以显示所选日期的事件和时间；不会修改或上传日程。</string>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>点击日程时，万年历需要控制系统日历以打开对应事件或日期；不会修改日程。</string>
 	<key>NSHumanReadableCopyright</key>
 	<string>Copyright © zfdang</string>
 </dict>

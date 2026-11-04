@@ -2,7 +2,7 @@ import AppKit
 import LunarCore
 import SwiftUI
 
-/// 日历使用的颜色，自动适配浅色 / 深色模式
+/// 日历使用的颜色，自动适配浅色 / 深色模式。
 enum Palette {
     private static func dynamic(light: UInt32, dark: UInt32) -> Color {
         func color(_ hex: UInt32) -> NSColor {
@@ -14,458 +14,308 @@ enum Palette {
         })
     }
 
-    /// 节假日红色：比系统红色柔和，避免刺眼
     static let red = dynamic(light: 0xC4473D, dark: 0xE27D72)
     static let blue = dynamic(light: 0x2F6BC4, dark: 0x74A7E8)
     static let accent = Color.accentColor
-    /// 日历背景：不透明，避免系统半透明材质降低对比度
+    static let calendarSelection = dynamic(light: 0x315F87, dark: 0x477A98)
     static let background = dynamic(light: 0xFFFFFF, dark: 0x1E1E20)
     static let nsBackground = NSColor(name: nil) { appearance in
         appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
             ? NSColor(srgbRed: 0x1E / 255.0, green: 0x1E / 255.0, blue: 0x20 / 255.0, alpha: 1) : .white
     }
-    /// 次要文字（农历日期等），比系统 secondary 颜色更深，提高对比度
     static let secondaryText = dynamic(light: 0x55555A, dark: 0xB4B4B9)
-    /// 标题栏、详细信息面板等区域的底色
     static let panel = dynamic(light: 0xF2F3F5, dark: 0x2B2B2E)
     static let hovered = dynamic(light: 0xE9EAED, dark: 0x343438)
     static let selected = Color.accentColor.opacity(0.18)
-
-    static func eventColor(_ event: DayEvent) -> Color {
-        event.highlight ? red : .primary
-    }
-
-    static func eventColor(_ event: UpcomingEvent) -> Color {
-        if let match = event.day.events.first(where: { $0.detailName == event.name }) {
-            return eventColor(match)
-        }
-        return event.name == event.day.solarTerm ? blue : .primary
-    }
 }
 
 struct CalendarView: View {
     @ObservedObject var model: CalendarViewModel
-    let menu: AppMenu
+    @ObservedObject var menu: AppMenu
+    @ObservedObject var calendarStore: SystemCalendarStore
+    var loadSystemCalendar = true
+    var previewEvents: [AgendaEvent]?
 
-    static let cellSize = CGSize(width: 64, height: 50)
-    private static let weekdays = Array("日一二三四五六").map(String.init)
+    @State private var showUpcoming = false
+    @State private var eventOpenMessage: String?
 
-    @State private var hovered: Int?
-    @State private var showUpcomingAtTitle = false
-    @State private var showUpcomingAtSummary = false
-    @State private var hoveredUpcoming: String?
-    @State private var hoveredTitleUpcoming = false
-    @State private var hoveredCustomDates = false
-    @State private var hoveredSummaryEvent = false
-    @State private var hoveredSummaryUpcoming = false
+    private var scale: CGFloat { menu.calendarSize.scale }
+    private var width: CGFloat { scaled(332) }
+    private var day: CalendarDay { model.detailDay }
+    private func scaled(_ value: CGFloat) -> CGFloat { value * scale }
 
     var body: some View {
-        VStack(spacing: 0) {
-            titleBar
-            weekdayBar
-            grid
-            DetailPanel(day: model.detailDay)
-                .padding(.top, 6)
-            upcomingSummary
+        VStack(alignment: .leading, spacing: 0) {
+            CompactMonthGrid(model: model, calendarStore: calendarStore, scale: scale,
+                             previewEventCounts: previewEvents.map { [day.date: $0.count] })
+                .padding(.horizontal, scaled(16))
+                .padding(.top, scaled(10))
+                .padding(.bottom, scaled(8))
             Divider()
-                .padding(.top, 8)
-            navigationBar
+            agenda
+            Divider()
+            toolbar
         }
-        .frame(width: Self.cellSize.width * 7)
-        .padding(.horizontal, 8)
-        .padding(.top, 6)
-        .padding(.bottom, 4)
+        .frame(width: width)
         .background(Palette.background)
-        .onDisappear {
-            hovered = nil
-            showUpcomingAtTitle = false
-            showUpcomingAtSummary = false
-            hoveredUpcoming = nil
-            hoveredTitleUpcoming = false
-            hoveredCustomDates = false
-            hoveredSummaryEvent = false
-            hoveredSummaryUpcoming = false
+        .onAppear {
+            loadVisibleEvents()
+        }
+        .onChange(of: model.grid.days.first?.date) { _ in
+            loadVisibleEvents()
+        }
+        .onChange(of: day.date) { _ in
+            eventOpenMessage = nil
+            loadVisibleEvents()
         }
     }
 
-    // MARK: - 标题
-
-    private var titleBar: some View {
-        let title = model.title
-        return HStack(spacing: 12) {
-            Text(title.solar)
-                .font(.system(size: 17, weight: .semibold))
-            Text(title.lunar)
-                .font(.system(size: 15))
-                .foregroundStyle(Palette.secondaryText)
-        }
-        .frame(maxWidth: .infinity)
-        .frame(height: 34)
-        .overlay(alignment: .leading) {
-            iconButton(icon: "list.bullet", help: "即将到来", isHovered: hoveredTitleUpcoming,
-                       onHover: { hoveredTitleUpcoming = $0 }) {
-                toggleUpcoming(atTitle: true)
-            }
-            .popover(isPresented: $showUpcomingAtTitle, arrowEdge: .bottom) { upcomingList }
-        }
-        .overlay(alignment: .trailing) {
-            iconButton(icon: "calendar.badge.plus", help: "自定义日期", isHovered: hoveredCustomDates,
-                       onHover: { hoveredCustomDates = $0 }) {
-                menu.onEditCustomEvents()
-            }
-        }
+    private func loadVisibleEvents() {
+        guard loadSystemCalendar else { return }
+        calendarStore.load(visibleDates: model.grid.days.map(\.date), selectedDate: day.date)
     }
 
-    private func iconButton(icon: String, help: String, isHovered: Bool,
-                            onHover: @escaping (Bool) -> Void, action: @escaping () -> Void) -> some View {
+    private var toolbar: some View {
+        HStack(spacing: scaled(4)) {
+            toolButton("plus", help: "自定义日期") { menu.onEditCustomEvents() }
+            Spacer(minLength: 0)
+            toolButton("list.bullet.rectangle", help: "即将到来") { showUpcoming.toggle() }
+                .popover(isPresented: $showUpcoming, arrowEdge: .top) { upcomingList }
+            toolButton(menu.isPinned ? "pin.slash" : "pin",
+                       help: menu.isPinned ? "取消固定窗口" : "固定窗口") {
+                menu.onTogglePinned()
+            }
+            menu.button
+                .frame(width: scaled(23), height: scaled(26))
+        }
+        .padding(.horizontal, scaled(9))
+        .frame(height: scaled(38))
+    }
+
+    private func toolButton(_ symbol: String, help: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            Image(systemName: icon)
-                .frame(width: 28, height: 28)
-                .background(RoundedRectangle(cornerRadius: 6).fill(isHovered ? Palette.hovered : .clear))
+            Image(systemName: symbol)
+                .font(.system(size: scaled(13)))
+                .foregroundStyle(Palette.secondaryText)
+                .frame(width: scaled(23), height: scaled(26))
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .onHover(perform: onHover)
         .help(help)
         .accessibilityLabel(help)
     }
 
-    private func toggleUpcoming(atTitle: Bool) {
-        if atTitle {
-            showUpcomingAtSummary = false
-            showUpcomingAtTitle.toggle()
+    private var agenda: some View {
+        VStack(alignment: .leading, spacing: scaled(6)) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("\(day.date.month)月\(day.date.day)日 \(day.weekdayName.replacingOccurrences(of: "星期", with: "周"))")
+                    .font(.system(size: scaled(14), weight: .semibold))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+                    .accessibilityLabel("\(day.date.month)月\(day.date.day)日 \(day.weekdayName)")
+                Spacer(minLength: scaled(8))
+                if day.date == model.today {
+                    Text("今天")
+                        .font(.system(size: scaled(10), weight: .medium))
+                        .foregroundStyle(Palette.secondaryText)
+                }
+            }
+            Text(day.lunarText)
+                .font(.system(size: scaled(11)))
+                .foregroundStyle(Palette.secondaryText)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+            if !day.allEvents.isEmpty {
+                Text(day.allEvents)
+                    .font(.system(size: scaled(11)))
+                    .foregroundStyle(day.hasHighlightedEvent ? Palette.red : Palette.secondaryText)
+                    .lineLimit(2)
+                    .help(day.allEvents)
+                    .accessibilityLabel("节日和节气：\(day.allEvents)")
+            }
+            agendaContent
+            if let eventOpenMessage {
+                Text(eventOpenMessage)
+                    .font(.system(size: scaled(10)))
+                    .foregroundStyle(Palette.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(.horizontal, scaled(16))
+        .padding(.top, scaled(12))
+        .padding(.bottom, scaled(13))
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder
+    private var agendaContent: some View {
+        if let previewEvents {
+            agendaList(previewEvents)
         } else {
-            showUpcomingAtTitle = false
-            showUpcomingAtSummary.toggle()
+            switch calendarStore.authorization {
+            case .notDetermined, .writeOnly:
+                VStack(alignment: .leading, spacing: scaled(4)) {
+                    Button {
+                        calendarStore.requestAccess()
+                    } label: {
+                        Label(calendarStore.isRequestingAccess ? "正在连接系统日历…" : "连接系统日历",
+                              systemImage: "calendar.badge.plus")
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(calendarStore.isRequestingAccess)
+                    .foregroundStyle(Palette.accent)
+                    .help("允许读取 macOS 日历中的日程")
+                    if let error = calendarStore.errorMessage {
+                        Text(error)
+                            .foregroundStyle(Palette.secondaryText)
+                    }
+                }
+                .frame(minHeight: scaled(52), alignment: .topLeading)
+            case .denied, .restricted:
+                VStack(alignment: .leading, spacing: scaled(4)) {
+                    Text("未获得日历读取权限")
+                        .foregroundStyle(Palette.secondaryText)
+                    Button("打开系统设置") {
+                        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Calendars") {
+                            NSWorkspace.shared.open(url)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(Palette.accent)
+                }
+                .frame(minHeight: scaled(52), alignment: .topLeading)
+            case .authorized:
+                if calendarStore.isLoading {
+                    ProgressView()
+                        .controlSize(.small)
+                        .frame(maxWidth: .infinity, minHeight: scaled(52))
+                } else if let error = calendarStore.errorMessage {
+                    Text(error)
+                        .foregroundStyle(Palette.secondaryText)
+                        .frame(minHeight: scaled(52), alignment: .topLeading)
+                } else if calendarStore.events.isEmpty {
+                    Text("这一天没有日程")
+                        .foregroundStyle(Palette.secondaryText)
+                        .frame(minHeight: scaled(52), alignment: .topLeading)
+                } else {
+                    agendaList(calendarStore.events)
+                }
+            }
         }
     }
 
-    private var upcomingSummary: some View {
-        HStack(spacing: 6) {
-            Text("接下来")
-                .foregroundStyle(Palette.secondaryText)
-                .fixedSize()
-            if let event = model.upcoming.first {
-                Button {
-                    model.select(event.day)
-                } label: {
-                    HStack(spacing: 6) {
-                        Text(event.name)
-                            .foregroundStyle(Palette.eventColor(event))
+    private func agendaList(_ events: [AgendaEvent]) -> some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: scaled(7)) {
+                ForEach(events) { event in
+                    agendaRow(event)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .frame(maxHeight: scaled(148))
+    }
+
+    private func agendaRow(_ event: AgendaEvent) -> some View {
+        Button {
+            eventOpenMessage = nil
+            CalendarEventOpener.shared.open(event, selectedDate: day.date) { result in
+                eventOpenMessage = result.message
+            }
+        } label: {
+            HStack(alignment: .top, spacing: scaled(8)) {
+                Text(event.isAllDay ? "全天" : clockText(event.startDate))
+                    .font(.system(size: scaled(10), weight: .medium))
+                    .foregroundStyle(Palette.secondaryText)
+                    .frame(width: scaled(40), alignment: .leading)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+                RoundedRectangle(cornerRadius: scaled(2))
+                    .fill(eventColor(event))
+                    .frame(width: scaled(3), height: scaled(29))
+                VStack(alignment: .leading, spacing: scaled(2)) {
+                    Text(event.title)
+                        .font(.system(size: scaled(12), weight: .medium))
+                        .lineLimit(2)
+                    let detail = event.isAllDay ? (event.calendarTitle ?? "全天") : eventTime(event)
+                    if !detail.isEmpty {
+                        Text(detail)
+                            .font(.system(size: scaled(10)))
+                            .foregroundStyle(Palette.secondaryText)
                             .lineLimit(1)
                             .truncationMode(.tail)
-                        Text("\(eventDate(event)) · \(countdown(event.daysAway))")
-                            .lineLimit(1)
-                            .fixedSize()
                     }
-                    .padding(.horizontal, 4)
-                    .padding(.vertical, 2)
-                    .background(RoundedRectangle(cornerRadius: 4)
-                        .fill(hoveredSummaryEvent ? Palette.hovered : .clear))
-                    .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
-                .layoutPriority(1)
-                .onHover { inside in hoveredSummaryEvent = inside }
-                .help("跳转到\(event.name)（\(solarDate(event))）")
-            } else {
-                Text("近期没有事件")
-                    .foregroundStyle(Palette.secondaryText)
+                Spacer(minLength: 0)
             }
-            Spacer(minLength: 0)
-            iconButton(icon: "list.bullet", help: "即将到来", isHovered: hoveredSummaryUpcoming,
-                       onHover: { hoveredSummaryUpcoming = $0 }) {
-                toggleUpcoming(atTitle: false)
-            }
-            .popover(isPresented: $showUpcomingAtSummary, arrowEdge: .top) { upcomingList }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
         }
-        .font(.system(size: 12))
-        .padding(.leading, 10)
-        .padding(.trailing, 4)
-        .padding(.vertical, 2)
-        .background(RoundedRectangle(cornerRadius: 8).fill(Palette.panel))
-        .padding(.top, 4)
+        .buttonStyle(.plain)
+        .help("在系统日历中打开\(event.title)\(event.calendarTitle.map { "（\($0)）" } ?? "")")
+        .accessibilityLabel("\(event.title)，\(eventTime(event))，在系统日历中打开")
     }
 
-    private func countdown(_ days: Int) -> String {
-        if days == 0 { return "今天" }
-        if days == 1 { return "明天" }
-        return "还有\(days)天"
+    private func eventColor(_ event: AgendaEvent) -> Color {
+        guard let rgb = event.calendarColorRGB else { return Palette.accent }
+        return Color(nsColor: NSColor(srgbRed: CGFloat((rgb >> 16) & 0xff) / 255,
+                                      green: CGFloat((rgb >> 8) & 0xff) / 255,
+                                      blue: CGFloat(rgb & 0xff) / 255, alpha: 1))
     }
 
-    private func eventDate(_ event: UpcomingEvent) -> String {
-        "\(solarDate(event)) \(lunarDate(event))"
+    private func eventTime(_ event: AgendaEvent) -> String {
+        if event.isAllDay { return "全天" }
+        let calendar = Calendar.localGregorian
+        let start = clockText(event.startDate)
+        let end = clockText(event.endDate)
+        if calendar.isDate(event.startDate, inSameDayAs: event.endDate) {
+            return "\(start)–\(end)"
+        }
+        return "\(dateText(event.startDate)) \(start)–\(dateText(event.endDate)) \(end)"
     }
 
-    private func solarDate(_ event: UpcomingEvent) -> String {
-        let date = event.day.date
-        let year = date.year == model.today.year ? "" : "\(date.year)年"
-        return "\(year)\(date.month)月\(date.day)日"
+    private func clockText(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "HH:mm"
+        formatter.timeZone = .current
+        return formatter.string(from: date)
     }
 
-    private func lunarDate(_ event: UpcomingEvent) -> String {
-        "农历\(event.day.lunarMonthName)月\(event.day.lunarDayName)"
+    private func dateText(_ date: Date) -> String {
+        let components = Calendar.localGregorian.dateComponents([.month, .day], from: date)
+        return "\(components.month ?? 0)月\(components.day ?? 0)日"
     }
 
     var upcomingList: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: scaled(8)) {
             Text("即将到来")
-                .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(Palette.secondaryText)
-                .frame(maxWidth: .infinity)
+                .font(.system(size: scaled(13), weight: .semibold))
             if model.upcoming.isEmpty {
-                Text("未来 90 天没有事件")
-                    .foregroundStyle(.secondary)
-                    .padding(.vertical, 12)
-            } else {
-                VStack(spacing: 0) {
-                    ForEach(model.upcoming) { event in
-                        Button {
-                            model.select(event.day)
-                            showUpcomingAtTitle = false
-                            showUpcomingAtSummary = false
-                        } label: {
-                            HStack(spacing: 8) {
-                                Text(event.name)
-                                    .foregroundStyle(Palette.eventColor(event))
-                                    .font(.system(size: 13, weight: .medium))
-                                    .lineLimit(1)
-                                    .truncationMode(.tail)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                Text(solarDate(event))
-                                    .font(.system(size: 11))
-                                    .foregroundStyle(Palette.secondaryText)
-                                    .lineLimit(1)
-                                    .minimumScaleFactor(0.8)
-                                    .frame(width: 82, alignment: .trailing)
-                                Text(lunarDate(event))
-                                    .font(.system(size: 11))
-                                    .foregroundStyle(Palette.secondaryText)
-                                    .lineLimit(1)
-                                    .minimumScaleFactor(0.8)
-                                    .frame(width: 95, alignment: .trailing)
-                                Text(countdown(event.daysAway))
-                                    .font(.system(size: 11))
-                                    .foregroundStyle(Palette.secondaryText)
-                                    .frame(width: 50, alignment: .trailing)
-                                Image(systemName: "chevron.right")
-                                    .font(.system(size: 10, weight: .semibold))
-                                    .foregroundStyle(Palette.secondaryText)
-                            }
-                            .padding(.horizontal, 10)
-                            .frame(minHeight: 36)
-                            .contentShape(Rectangle())
-                            .background(RoundedRectangle(cornerRadius: 6)
-                                .fill(hoveredUpcoming == event.id ? Palette.hovered : .clear))
-                        }
-                        .buttonStyle(.plain)
-                        .onHover { inside in
-                            hoveredUpcoming = inside ? event.id : (hoveredUpcoming == event.id ? nil : hoveredUpcoming)
-                        }
-                        .help("查看\(event.name)的日期")
-                    }
-                }
-                Text("显示未来 90 天内最多 6 项")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .padding(14)
-        .frame(width: 450)
-        .background(Palette.background)
-        .onDisappear { hoveredUpcoming = nil }
-    }
-
-    private var weekdayBar: some View {
-        HStack(spacing: 0) {
-            ForEach(0..<7, id: \.self) { i in
-                Text(Self.weekdays[i])
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(i == 0 || i == 6 ? Palette.red : Palette.secondaryText)
-                    .frame(width: Self.cellSize.width, height: 26)
-            }
-        }
-        .background(RoundedRectangle(cornerRadius: 6).fill(Palette.panel))
-        .padding(.bottom, 2)
-    }
-
-    // MARK: - 日期格
-
-    private var grid: some View {
-        let days = model.grid.days
-        return VStack(spacing: 0) {
-            ForEach(0..<6, id: \.self) { row in
-                HStack(spacing: 0) {
-                    ForEach(0..<7, id: \.self) { col in
-                        cell(index: row * 7 + col, day: days[row * 7 + col])
-                    }
-                }
-            }
-        }
-    }
-
-    private func cell(index: Int, day: CalendarDay) -> some View {
-        let inMonth = model.grid.isInMonth(day)
-        let isToday = inMonth && day.date == model.today
-        let isSelected = inMonth && !isToday && model.isHighlighted(day)
-
-        let background: Color = isToday ? Palette.accent
-            : isSelected ? Palette.selected
-            : hovered == index ? Palette.hovered
-            : .clear
-
-        return VStack(spacing: 1) {
-            Text("\(day.date.day)")
-                .font(.system(size: 22, weight: isToday ? .semibold : .regular))
-                .foregroundStyle(isToday ? AnyShapeStyle(.white) : dayColor(day))
-            Text(day.shortText)
-                .font(.system(size: 11))
-                .foregroundStyle(isToday ? AnyShapeStyle(.white.opacity(0.9)) : lunarColor(day))
-                .lineLimit(1)
-        }
-        .frame(width: Self.cellSize.width - 4, height: Self.cellSize.height - 4)
-        .background(RoundedRectangle(cornerRadius: 8).fill(background))
-        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(isSelected ? Palette.accent.opacity(0.7) : .clear))
-        .frame(width: Self.cellSize.width, height: Self.cellSize.height)
-        .opacity(inMonth ? 1 : 0.3)
-        .contentShape(Rectangle())
-        .onHover { inside in
-            hovered = inside ? index : (hovered == index ? nil : hovered)
-        }
-        .onTapGesture {
-            hovered = nil
-            model.select(day)
-        }
-    }
-
-    private func dayColor(_ day: CalendarDay) -> AnyShapeStyle {
-        day.isRestDay ? AnyShapeStyle(Palette.red) : AnyShapeStyle(.primary)
-    }
-
-    private func lunarColor(_ day: CalendarDay) -> AnyShapeStyle {
-        if day.hasHighlightedEvent || day.isOffDay { return AnyShapeStyle(Palette.red) }
-        if !day.solarTerm.isEmpty { return AnyShapeStyle(Palette.blue) }
-        return AnyShapeStyle(Palette.secondaryText)
-    }
-
-    // MARK: - 底部导航栏
-
-    private var navigationBar: some View {
-        HStack(spacing: 4) {
-            menu.button
-            Spacer(minLength: 0)
-            Picker("", selection: Binding(get: { model.year }, set: { model.setYear($0) })) {
-                ForEach(CalendarViewModel.years, id: \.self) { Text(String($0)).tag($0) }
-            }
-            .labelsHidden()
-            .frame(width: 66)
-            Text("年")
-            Picker("", selection: Binding(get: { model.month }, set: { model.setMonth($0) })) {
-                ForEach(1...12, id: \.self) { Text(String($0)).tag($0) }
-            }
-            .labelsHidden()
-            .frame(width: 48)
-            Text("月")
-            Group {
-                navButton("上年", icon: "chevron.backward.2", help: "上一年 (←)") { model.moveYear(by: -1) }
-                    .disabled(!model.canMoveBackward)
-                navButton("上月", icon: "chevron.backward", help: "上一月 (↑)") { model.moveMonth(by: -1) }
-                    .disabled(!model.canMoveBackward)
-                navButton("下月", icon: "chevron.forward", trailing: true, help: "下一月 (↓)") { model.moveMonth(by: 1) }
-                    .disabled(!model.canMoveForward)
-                navButton("下年", icon: "chevron.forward.2", trailing: true, help: "下一年 (→)") { model.moveYear(by: 1) }
-                    .disabled(!model.canMoveForward)
-                navButton("今日", icon: "arrow.uturn.backward", help: "回到今天 (↵)") { model.showToday() }
-            }
-        }
-        .font(.system(size: 12))
-        .controlSize(.small)
-        .frame(height: 32)
-    }
-
-    private func navButton(_ title: String, icon: String, trailing: Bool = false, help: String,
-                           action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack(spacing: 1) {
-                if !trailing { Image(systemName: icon) }
-                Text(title)
-                if trailing { Image(systemName: icon) }
-            }
-        }
-        .fixedSize()
-        .help(help)
-    }
-}
-
-/// 选中日期（默认今天）的详细信息
-struct DetailPanel: View {
-    let day: CalendarDay
-
-    var body: some View {
-        HStack(alignment: .center, spacing: 12) {
-            VStack(alignment: .leading, spacing: 3) {
-                Text("\(day.solarText)  \(day.weekdayName)")
-                    .font(.system(size: 13, weight: .semibold))
-                Text("农历\(day.lunarMonthName)月\(day.lunarDayName)　\(day.ganZhiYearByLiChun)年 \(day.ganZhiMonth)月 \(day.ganZhiDay)日　属\(day.shengXiao)")
-                    .font(.system(size: 12))
+                Text("近期没有节日或自定义日期")
                     .foregroundStyle(Palette.secondaryText)
-                    .lineLimit(1)
-            }
-            .fixedSize(horizontal: true, vertical: false)
-            VStack(alignment: .trailing, spacing: 3) {
-                if let tag = adjustmentTag {
-                    Text(tag.text)
-                        .font(.system(size: 11))
-                        .foregroundStyle(tag.color)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 1)
-                        .background(Capsule().fill(tag.color.opacity(0.15)))
-                        .lineLimit(1)
-                }
-                if !day.allEvents.isEmpty {
-                    VStack(alignment: .trailing, spacing: 3) {
-                        ForEach(Array(eventLines.enumerated()), id: \.offset) { _, text in
-                            text
-                                .lineLimit(eventLines.count == 1 && adjustmentTag == nil ? 2 : 1)
+            } else {
+                ForEach(model.upcoming) { event in
+                    Button {
+                        model.select(event.day)
+                        showUpcoming = false
+                    } label: {
+                        HStack {
+                            Text(event.name)
+                                .lineLimit(1)
+                            Spacer(minLength: 0)
+                            Text("\(event.day.date.month)月\(event.day.date.day)日")
+                                .foregroundStyle(Palette.secondaryText)
                         }
+                        .contentShape(Rectangle())
                     }
-                    .font(.system(size: 12))
-                    .multilineTextAlignment(.trailing)
-                    .help(day.allEvents)
+                    .buttonStyle(.plain)
                 }
             }
-            .frame(maxWidth: .infinity, alignment: .trailing)
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 8)
-        .frame(maxWidth: .infinity)
-        .frame(height: 50)
-        .background(RoundedRectangle(cornerRadius: 8).fill(Palette.panel))
-    }
-
-    private var eventLines: [Text] {
-        var events = day.events.map {
-            Text($0.detailName).foregroundColor(Palette.eventColor($0))
-        }
-        if !day.solarTerm.isEmpty {
-            events.append(Text(day.solarTerm).foregroundColor(Palette.blue))
-        }
-        guard let first = events.first else { return [] }
-        if adjustmentTag == nil, events.count > 1 {
-            return [first, joinedEvents(Array(events.dropFirst()))]
-        }
-        return [joinedEvents(events)]
-    }
-
-    private func joinedEvents(_ events: [Text]) -> Text {
-        guard let first = events.first else { return Text("") }
-        return events.dropFirst().reduce(first) { $0 + Text(" ") + $1 }
-    }
-
-    /// 调休标记，例如"春节 放假"、"春节 调休上班"
-    private var adjustmentTag: (text: String, color: Color)? {
-        guard let holiday = day.holiday else { return nil }
-        let name = holiday.name.isEmpty ? "" : holiday.name + " "
-        return holiday.isOffDay ? (name + "放假", Palette.red) : (name + "调休上班", Palette.secondaryText)
+        .font(.system(size: scaled(12)))
+        .padding(scaled(12))
+        .frame(width: scaled(270))
+        .background(Palette.background)
     }
 }

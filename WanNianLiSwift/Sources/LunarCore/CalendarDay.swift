@@ -13,6 +13,8 @@ public struct CalendarDay: Hashable, Sendable {
     public let holiday: HolidayDay?
     /// 日期格中数字下方显示的文字
     public let shortText: String
+    /// 日期格始终显示的农历文字，初一显示月份。
+    public let lunarShortText: String
 
     public init(date: SolarDate, data: CalendarData) {
         self.date = date
@@ -21,6 +23,10 @@ public struct CalendarDay: Hashable, Sendable {
         solarTerm = LunarCalendar.solarTerm(on: date)
         events = data.events(on: date, lunar: lunar)
         holiday = data.holidays[date.key]
+
+        lunarShortText = lunar.day == 1
+            ? LunarCalendar.monthName(lunar.month, isLeap: lunar.isLeap) + "月"
+            : LunarCalendar.dayName(lunar.day)
 
         var text = (events.map(\.name) + [solarTerm]).filter { !$0.isEmpty }.joined(separator: " ")
         if text.isEmpty {
@@ -54,6 +60,9 @@ public struct CalendarDay: Hashable, Sendable {
     public var isRestDay: Bool { isOffDay || (isWeekend && !isMakeupWorkday) }
     /// 有需要醒目显示的节日或事件
     public var hasHighlightedEvent: Bool { events.contains(where: \.highlight) }
+    /// 节日、用户事件或节气提示；独立于固定显示的农历日期。
+    public var occasionShortText: String { Self.shorten(allEvents) }
+    public var hasOccasion: Bool { !allEvents.isEmpty }
     public var lunarMonthName: String { LunarCalendar.monthName(lunar.month, isLeap: lunar.isLeap) }
     public var lunarDayName: String { LunarCalendar.dayName(lunar.day) }
     /// 年干支，以春节为界（与生肖一致，用于标题）
@@ -75,17 +84,18 @@ public struct CalendarDay: Hashable, Sendable {
     }
 }
 
-/// 一个月的月历：固定 6 行 × 7 列，从星期日开始
+/// 一个月的月历：固定 6 行 × 7 列，默认从星期日开始
 public struct MonthGrid: Sendable {
     public let year: Int
     public let month: Int
     public let days: [CalendarDay]
 
-    public init(year: Int, month: Int, data: CalendarData) {
+    public init(year: Int, month: Int, data: CalendarData, firstWeekday: Int = 0) {
         self.year = year
         self.month = month
         let first = SolarDate(year: year, month: month, day: 1)
-        let start = first.adding(days: -first.weekday)
+        let leadingDays = (first.weekday - firstWeekday + 7) % 7
+        let start = first.adding(days: -leadingDays)
         days = (0..<42).map { CalendarDay(date: start.adding(days: $0), data: data) }
     }
 
