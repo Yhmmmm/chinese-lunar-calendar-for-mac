@@ -12,7 +12,7 @@ cd "$(dirname "$0")/../.."
 
 TAG=${1:?usage: publish-website.sh <tag>, e.g. v4.2}
 VERSION=${TAG#v}
-REPO=zfdang/chinese-lunar-calendar-for-mac
+REPO=${GITHUB_REPOSITORY:-$(gh repo view --json nameWithOwner --jq .nameWithOwner)}
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
 

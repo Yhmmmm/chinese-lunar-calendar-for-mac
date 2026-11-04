@@ -24,6 +24,9 @@ extension SolarDate {
 @MainActor
 final class CalendarViewModel: ObservableObject {
     static let years = LunarCalendar.supportedYears
+    private static let browsingYearKey = "browsingCalendarYear"
+    private static let browsingMonthKey = "browsingCalendarMonth"
+    private static let browsingDayKey = "browsingCalendarDay"
 
     @Published private(set) var year: Int
     @Published private(set) var month: Int
@@ -34,19 +37,32 @@ final class CalendarViewModel: ObservableObject {
     @Published private(set) var upcoming: [UpcomingEvent] = []
 
     private let store: DataStore
+    private let preferences: UserDefaults
     private var cancellable: AnyCancellable?
 
-    init(store: DataStore) {
+    init(store: DataStore, preferences: UserDefaults = .standard, today: SolarDate = .today) {
         self.store = store
-        let today = SolarDate.today
+        self.preferences = preferences
+        let restored = Self.restoredBrowsingState(from: preferences, today: today)
         self.today = today
-        year = today.year
-        month = today.month
-        grid = MonthGrid(year: today.year, month: today.month, data: store.data)
+        year = restored?.year ?? today.year
+        month = restored?.month ?? today.month
+        selected = restored?.selected
+        grid = MonthGrid(year: restored?.year ?? today.year, month: restored?.month ?? today.month,
+                         data: store.data, firstWeekday: 1)
+        if preferences.bool(forKey: "rememberBrowsingDate"),
+           preferences.object(forKey: Self.browsingYearKey) != nil, restored == nil {
+            Self.clearBrowsingState(in: preferences)
+        }
+        if let restored, restored.selected == nil,
+           (preferences.integer(forKey: Self.browsingYearKey) != today.year
+            || preferences.integer(forKey: Self.browsingMonthKey) != today.month) {
+            saveBrowsingState()
+        }
         updateUpcoming(data: store.data)
         cancellable = store.$data.dropFirst().sink { [weak self] data in
             guard let self else { return }
-            self.grid = MonthGrid(year: self.year, month: self.month, data: data)
+            self.grid = MonthGrid(year: self.year, month: self.month, data: data, firstWeekday: 1)
             self.updateUpcoming(data: data)
         }
     }
@@ -57,15 +73,32 @@ final class CalendarViewModel: ObservableObject {
     func showToday() {
         today = .today
         updateUpcoming(data: store.data)
-        selected = nil
         show(year: today.year, month: today.month)
+        selected = nil
+        saveBrowsingState()
     }
 
     /// 跨天时更新"今天"，保留当前显示的月份和选中的日期
     func refreshToday() {
         if today != .today {
+            let followedToday = selected == nil && year == today.year && month == today.month
             today = .today
             updateUpcoming(data: store.data)
+            if followedToday {
+                year = today.year
+                month = today.month
+                grid = MonthGrid(year: year, month: month, data: store.data, firstWeekday: 1)
+                saveBrowsingState()
+            }
+        }
+    }
+
+    func setRememberBrowsingDate(_ enabled: Bool) {
+        preferences.set(enabled, forKey: "rememberBrowsingDate")
+        if enabled {
+            saveBrowsingState()
+        } else {
+            Self.clearBrowsingState(in: preferences)
         }
     }
 
@@ -98,9 +131,15 @@ final class CalendarViewModel: ObservableObject {
     var canMoveForward: Bool { year * 12 + month < Self.years.upperBound * 12 + 12 }
 
     private func show(year: Int, month: Int) {
+        if year != self.year || month != self.month {
+            let visibleDay = selected ?? today
+            selected = SolarDate(year: year, month: month,
+                                 day: min(visibleDay.day, SolarDate.daysInMonth(year: year, month: month)))
+        }
         self.year = year
         self.month = month
-        grid = MonthGrid(year: year, month: month, data: store.data)
+        grid = MonthGrid(year: year, month: month, data: store.data, firstWeekday: 1)
+        saveBrowsingState()
     }
 
     /// 点击日期：点击今天会清除选中，回到默认状态；点击上月或下月的日期时切换到该月
@@ -109,6 +148,7 @@ final class CalendarViewModel: ObservableObject {
         if !grid.isInMonth(day) && Self.years.contains(day.date.year) {
             show(year: day.date.year, month: day.date.month)
         }
+        saveBrowsingState()
     }
 
     // MARK: - 显示
@@ -122,6 +162,38 @@ final class CalendarViewModel: ObservableObject {
     var detailDay: CalendarDay {
         let date = selected ?? today
         return grid.days.first { $0.date == date } ?? CalendarDay(date: date, data: store.data)
+    }
+
+    private func saveBrowsingState() {
+        guard preferences.bool(forKey: "rememberBrowsingDate") else { return }
+        preferences.set(year, forKey: Self.browsingYearKey)
+        preferences.set(month, forKey: Self.browsingMonthKey)
+        preferences.set(selected?.day ?? 0, forKey: Self.browsingDayKey)
+    }
+
+    private static func restoredBrowsingState(from preferences: UserDefaults, today: SolarDate)
+        -> (year: Int, month: Int, selected: SolarDate?)? {
+        guard preferences.bool(forKey: "rememberBrowsingDate"),
+              preferences.object(forKey: browsingYearKey) != nil,
+              preferences.object(forKey: browsingMonthKey) != nil,
+              preferences.object(forKey: browsingDayKey) != nil else { return nil }
+        let year = preferences.integer(forKey: browsingYearKey)
+        let month = preferences.integer(forKey: browsingMonthKey)
+        let day = preferences.integer(forKey: browsingDayKey)
+        guard years.contains(year), (1...12).contains(month),
+              (0...SolarDate.daysInMonth(year: year, month: month)).contains(day) else { return nil }
+        if day == 0 {
+            return (today.year, today.month, nil)
+        }
+        let selected = SolarDate(year: year, month: month, day: day)
+        guard selected.year == year, selected.month == month else { return nil }
+        return (year, month, selected)
+    }
+
+    private static func clearBrowsingState(in preferences: UserDefaults) {
+        preferences.removeObject(forKey: browsingYearKey)
+        preferences.removeObject(forKey: browsingMonthKey)
+        preferences.removeObject(forKey: browsingDayKey)
     }
 
     /// 标题栏的两部分文字

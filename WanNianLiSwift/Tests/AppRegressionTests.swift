@@ -18,9 +18,42 @@ struct AppRegressionTests {
         }
     }
 
+    static func checkMonthGridContinuity(_ grid: MonthGrid, firstWeekday: Int, _ label: String) {
+        check(grid.days.count == 42, "\(label) contains six complete weeks")
+        check(grid.days.first?.date.weekday == firstWeekday, "\(label) starts on the requested weekday")
+        check(stride(from: 0, to: grid.days.count, by: 7).allSatisfy {
+            grid.days[$0].date.weekday == firstWeekday
+        }, "\(label) keeps the same weekday at the start of every row")
+        check(zip(grid.days, grid.days.dropFirst()).allSatisfy {
+            $1.date.dayNumber == $0.date.dayNumber + 1
+        }, "\(label) has no gaps between dates")
+    }
+
     @MainActor
     static func main() throws {
         try festivalRegressions()
+        let emptyCalendar = CalendarData()
+        let octoberMonday = MonthGrid(year: 2026, month: 10, data: emptyCalendar, firstWeekday: 1)
+        checkMonthGridContinuity(octoberMonday, firstWeekday: 1, "Monday-first October 2026")
+        check(octoberMonday.days.first?.date == SolarDate(year: 2026, month: 9, day: 28),
+              "Monday-first October starts on September 28")
+        check(octoberMonday.days[30].date == SolarDate(year: 2026, month: 10, day: 28)
+              && octoberMonday.days[30].weekday == 3, "October 28 is in the Wednesday column")
+        let octoberSunday = MonthGrid(year: 2026, month: 10, data: emptyCalendar)
+        checkMonthGridContinuity(octoberSunday, firstWeekday: 0, "default Sunday-first October 2026")
+        let leapFebruary = MonthGrid(year: 2024, month: 2, data: emptyCalendar, firstWeekday: 1)
+        check(leapFebruary.days.filter { $0.date.year == 2024 && $0.date.month == 2 }.count == 29,
+              "Monday-first leap February includes February 29 exactly once")
+
+        let ordinaryDay = CalendarDay(date: SolarDate(year: 2026, month: 10, day: 28), data: emptyCalendar)
+        check(ordinaryDay.lunarShortText == ordinaryDay.lunarDayName && !ordinaryDay.hasOccasion,
+              "ordinary date always exposes its lunar day")
+        let festivalData = CalendarData(holidays: nil,
+            festivals: FestivalCatalog.selected(hiddenCategories: [], calendars: []), customEvents: [])
+        let lunarNewYear = CalendarDay(date: SolarDate(year: 2026, month: 2, day: 17), data: festivalData)
+        check(lunarNewYear.lunarShortText == "正月" && lunarNewYear.occasionShortText.contains("春节"),
+              "lunar New Year keeps its month label beside the festival")
+
         let suite = "app-regressions-" + UUID().uuidString
         let preferences = UserDefaults(suiteName: suite)!
         defer { preferences.removePersistentDomain(forName: suite) }

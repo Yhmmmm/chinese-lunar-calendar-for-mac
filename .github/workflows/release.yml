@@ -122,7 +122,7 @@ jobs:
   website:
     needs: build
     if: >-
-      always() && !cancelled() &&
+      vars.ENABLE_WEBSITE_RELEASE == 'true' && always() && !cancelled() &&
       (github.event_name == 'release' ||
        (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/') && needs.build.result == 'success'))
     runs-on: macos-15

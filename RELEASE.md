@@ -2,6 +2,15 @@
 
 以下是新版 WanNianLiSwift 的发布流程。版本号只来自 git tag，不需要修改代码中的版本号。
 
+## 此 Fork 的首次发布
+
+1. 将 `codex/layout-a-personal` 合并到此 Fork 的 `master`，确认 GitHub Actions 构建通过。
+2. 将下面“未发布”的更新历史整理为正式版本，例如 `4.5.2`。
+3. 在本地最新的 `master` 上创建并推送 `v4.5.2` 标签；Actions 会把 Apple 芯片和 Intel 安装包上传到**此 Fork** 的 Release。
+4. 网站更新任务在此 Fork 默认关闭。只有配置了自己的 GitHub Pages、修正 `docs/` 中的域名与下载链接后，才在仓库变量中设置 `ENABLE_WEBSITE_RELEASE=true`。应用内的假日在线更新继续读取原项目的公开假日数据。
+
+此 Fork 保留原项目版权和 MIT 许可证。应用使用原 Bundle ID 以兼容现有安装和用户数据；若未来需要与原版同时安装，应另行设计 Bundle ID、数据目录和权限迁移。
+
 ## 1. 准备
 
 1. 代码合并到 master，确认 CI（`.github/workflows/release.yml`）通过：
@@ -9,17 +18,17 @@
    发布前检查两个安装包的架构、版本和签名。ARM runner 容量不足时可能排队等待，不需要切换构建机
 2. 在 [CHANGELOG.md](CHANGELOG.md) 中把“未发布”一节的标题改为新版本号和日期（如 `## 4.2（2026-10-15）`），
    再在它上面加一个空的“## 未发布”小节，留给下一个版本
-3. 如果界面有变化，更新网站截图（`docs/images/`）：
+3. 如果界面有变化，先更新本 Fork 的示例截图（`WanNianLiSwift/Docs/`）；启用自己的网站后再更新 `docs/images/`：
 
    ```bash
    cd WanNianLiSwift
-   WANNIANLI_DATA_DIR=/tmp/calendar-demo swift run WanNianLi --snapshot /tmp/shots 20261107
-   # /tmp/calendar-demo 中预先放入仅含示例事件的 custom-events.json；日期格式 yyyyMMdd
-   cp /tmp/shots/{calendar-light,calendar-dark,custom-events,custom-events-dark}.png ../docs/images/
+   swift run WanNianLi --snapshot /tmp/shots 20261107 -calendarSize standard
+   cp /tmp/shots/calendar-light.png Docs/calendar-layout-a-light.png
+   cp /tmp/shots/calendar-dark.png Docs/calendar-layout-a-dark.png
    ```
 
-   使用单独的示例数据目录，避免公开本机真实生日和纪念日。日历截图应包含同一天的多个事件，以检查右侧两行显示和各自颜色；
-   `icon.png`（菜单栏图标）只用于检查，不需要复制到网站
+   快照使用隔离示例数据，不读取真实系统日历。截图应检查农历与日程时间线在浅色、深色下都完整显示；
+   `icon.png`（菜单栏图标）只用于检查，不需要提交到网站
 
 ## 2. 发布
 
@@ -32,7 +41,7 @@ GitHub Actions 会构建 Apple 芯片和 Intel 芯片两个版本，并创建 Gi
 
 ## 3. 更新网站
 
-发布成功后，`.github/workflows/release.yml` 会自动从最新正式 Release 下载两个安装包，
+仅当仓库变量 `ENABLE_WEBSITE_RELEASE=true` 时，`.github/workflows/release.yml` 会从最新正式 Release 下载两个安装包，
 检查架构、版本号和签名，并创建网站更新 PR（已有待合并的网站更新 PR 时复用）。
 PR 包含 `docs/` 中两个固定文件名的下载包、`docs/version.json` 和网页后备版本号。
 人工合并后，GitHub Pages 会自动更新。预发布版和旧版本重跑不会回退网站下载。
